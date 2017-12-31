@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 )
 
 type valType uint16
@@ -100,6 +101,7 @@ type Machine struct {
 	stack   []uint16        // stack
 	pc      uint16          // program counter (mem addr)
 	sp      uint16          // stack pointer
+	rdr     *bufio.Reader   // buffered reader for stdin
 }
 
 func NewMachine() (m *Machine) {
@@ -107,6 +109,7 @@ func NewMachine() (m *Machine) {
 	m.stack = make([]uint16, STACKSIZE)
 	m.pc = 0
 	m.sp = 0
+	m.rdr = bufio.NewReader(os.Stdin)
 	return
 }
 
@@ -246,6 +249,7 @@ func (m *Machine) GetInstruction(pc uint16) (op opCode, a, b, c, next_pc uint16,
 // instruction.
 func (m *Machine) Execute() (err error) {
 	var val uint16
+	var ch byte
 	for err == nil {
 		op, a, b, c, next_pc, err := m.GetInstruction(m.pc)
 		if err != nil {
@@ -310,6 +314,11 @@ func (m *Machine) Execute() (err error) {
 			next_pc, err = m.Pop()
 		case OUT:
 			fmt.Printf("%c", a)
+		case IN:
+			ch, err = m.rdr.ReadByte()
+			if err == nil {
+				err = m.SetRegister(a, uint16(ch))
+			}
 		case NOOP:
 		default:
 			err = fmt.Errorf("Unrecognized opcode: %d at pc=%d", op, m.pc)
