@@ -11,7 +11,6 @@ const (
 )
 
 func main() {
-	// Part1
 	m := machine.NewMachine()
 
 	fmt.Printf("Load program from %s\n", INPUTFILE)
@@ -28,8 +27,11 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println("## Part 1")
-	err = m.Execute()
+	fmt.Println("================================")
+	err = m.Disassemble(0)
+	fmt.Println("================================")
+
+	// err = m.Execute()
 	if err != nil {
 		fmt.Printf("Error: %s\n", err)
 	}
