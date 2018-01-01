@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"fmt"
 	"github.com/tomp/synacor-challenge/machine"
 	"os"
@@ -8,6 +9,7 @@ import (
 
 const (
 	INPUTFILE string = "challenge.bin"
+	SOURCEFILE string = "challenge.asm"
 )
 
 func main() {
@@ -27,11 +29,24 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println("================================")
-	err = m.Disassemble(0)
-	fmt.Println("================================")
+	fp, err := os.Create(SOURCEFILE)
+	if err == nil {
+		fmt.Printf("Writing disassembled code to %s\n", SOURCEFILE)
+	}
+	addrChan := make(chan uint16, 0)
+	go func(w io.WriteCloser, addresses chan uint16) {
+		defer w.Close()
+		fmt.Fprintln(w, "================================")
+		err = m.Disassemble(w, addrChan)
+		fmt.Fprintln(w, "================================")
+		if err != nil {
+			fmt.Fprintf(w, "Error: %s\n", err)
+		}
+	}(fp, addrChan)
 
-	// err = m.Execute()
+	addrChan <- uint16(0)
+
+	err = m.Execute(addrChan)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err)
 	}

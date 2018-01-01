@@ -296,7 +296,11 @@ func FormatInstruction(words []uint16) string {
 	case R, V:
 		return fmt.Sprintf("%s %s", name, FormatVal(words[1]))
 	case C:
-		return fmt.Sprintf("%s %q", name, words[1])
+		if words[1] < MAXVALUE {
+			return fmt.Sprintf("%s %q", name, words[1])
+		} else {
+			return fmt.Sprintf("%s %s", name, FormatVal(words[1]))
+		}
 	case A:
 		return fmt.Sprintf("%s @%s", name, FormatVal(words[1]))
 	case RV, VV:
@@ -322,7 +326,7 @@ func FormatInstruction(words []uint16) string {
 // Execute the program starting at the current program counter.
 // An error is returned if execution doesn't terminate on a HALT
 // instruction.
-func (m *Machine) Execute() (err error) {
+func (m *Machine) Execute(addresses chan uint16) (err error) {
 	var val uint16
 	var ch byte
 	for err == nil {
@@ -357,14 +361,17 @@ func (m *Machine) Execute() (err error) {
 			}
 		case JMP:
 			next_pc = a
+			addresses <- a
 		case JT:
 			if a != 0 {
 				next_pc = b
 			}
+			addresses <- b
 		case JF:
 			if a == 0 {
 				next_pc = b
 			}
+			addresses <- b
 		case ADD:
 			err = m.SetRegister(a, (b+c)&BITMASK)
 		case MULT:
@@ -385,8 +392,10 @@ func (m *Machine) Execute() (err error) {
 		case CALL:
 			m.Push(next_pc)
 			next_pc = a
+			addresses <- a
 		case RET:
 			next_pc, err = m.Pop()
+			addresses <- next_pc
 		case OUT:
 			fmt.Printf("%c", a)
 		case IN:
@@ -405,34 +414,41 @@ func (m *Machine) Execute() (err error) {
 	return err
 }
 
-func (m *Machine) Disassemble(pc int) error {
-	addr_queue := []uint16{uint16(pc)}
+func (m *Machine) Disassemble(wtr io.Writer, addresses chan uint16) error {
 	visited := make(map[uint16]bool)
-	for len(addr_queue) > 0 {
-		addr := addr_queue[0]
-		addr_queue = addr_queue[1:]
-		for addr < MAXVALUE {
-			if visited[addr] {
-				break
-			}
-			visited[addr] = true
-			op, _, _, _, next_pc, err := m.GetInstruction(addr)
-			if err != nil {
-				break
-			}
-			values := m.mem[addr:next_pc]
-			words := FormatWords(values, 4)
-			code := FormatInstruction(values)
-			fmt.Printf("%04x: %-30s : %s\n", addr, words, code)
-			for _, value := range(values[1:]) {
-				if value < MAXVALUE && value > 0xff && ! visited[value] {
-					addr_queue = append(addr_queue, value)
+	addr_queue := []uint16{}
+	for {
+		addr := <-addresses
+		if ! visited[addr] {
+			fmt.Fprintf(wtr, "%04x:\n", addr)
+			addr_queue = append(addr_queue, addr)
+		}
+		for len(addr_queue) > 0 {
+			addr := addr_queue[0]
+			addr_queue = addr_queue[1:]
+			for addr < MAXVALUE {
+				if visited[addr] {
+					break
 				}
-			}
-			if op == JMP || op == HALT {
-				addr = MAXVALUE
-			} else {
-				addr = next_pc
+				visited[addr] = true
+				op, _, _, _, next_pc, err := m.GetInstruction(addr)
+				if err != nil {
+					break
+				}
+				values := m.mem[addr:next_pc]
+				words := FormatWords(values, 4)
+				code := FormatInstruction(values)
+				fmt.Fprintf(wtr, "%04x: %-30s : %s\n", addr, words, code)
+				for _, value := range(values[1:]) {
+					if value < MAXVALUE && value > 0xff && ! visited[value] {
+						addr_queue = append(addr_queue, value)
+					}
+				}
+				if op == JMP || op == HALT {
+					addr = MAXVALUE
+				} else {
+					addr = next_pc
+				}
 			}
 		}
 	}
