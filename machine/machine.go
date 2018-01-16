@@ -34,11 +34,11 @@ const (
 	R           // register
 	RV          // register, value
 	RVV         // register, value, value
-	C // character
-	A // address
-	AV // address, value
-	VA // value, address
-	RA // register, address
+	C           // character
+	A           // address
+	AV          // address, value
+	VA          // value, address
+	RA          // register, address
 )
 
 // Constants for instruction opcodes.
@@ -111,8 +111,10 @@ type Machine struct {
 	mem   [MEMSIZE]uint16 // memory
 	reg   [NREG]uint16    // registers
 	stack []uint16        // stack
+	frame []uint16        // stack pointers marking call frames
 	pc    uint16          // program counter (mem addr)
 	sp    uint16          // stack pointer
+	fp    uint16          // frame pointer
 	rdr   *bufio.Reader   // buffered reader for stdin
 }
 
@@ -205,6 +207,26 @@ func (m *Machine) Pop() (uint16, error) {
 	return m.stack[m.sp], nil
 }
 
+// PushFrame pushes the current program counter to the frame stack.
+func (m *Machine) PushFrame() {
+	if m.fp == uint16(len(m.frame)) {
+		m.frame = append(m.frame, m.pc)
+	} else {
+		m.frame[m.fp] = m.pc
+	}
+	m.fp += 1
+}
+
+// PopFrame removes the top value from the frame stack.
+// An error is returned if the stack is empty.
+func (m *Machine) PopFrame() (uint16, error) {
+	if m.fp == 0 {
+		return 0, fmt.Errorf("Frame stack is empty")
+	}
+	m.fp -= 1
+	return m.frame[m.fp], nil
+}
+
 // value returns the value represented by the given number.
 func (m *Machine) value(number uint16) (uint16, error) {
 	if number < MAXVALUE {
@@ -266,6 +288,36 @@ func (m *Machine) GetInstruction(pc uint16) (op opCode, a, b, c, next_pc uint16,
 	return
 }
 
+// PrintState writes out the cuurent state of the cpu.
+func (m *Machine) PrintState(fp io.Writer, words []uint16) {
+	if fp != nil {
+		fmt.Fprintln(fp, m.FormatState(words))
+	}
+}
+
+// FormatState returns a string summarizing the state of the CPU.
+func (m *Machine) FormatState(words []uint16) string {
+	ws := []string{}
+	ws = append(ws, fmt.Sprintf("PC=%04x SP=%2d ", m.pc, m.sp))
+	ws = append(ws, " :")
+	for i, v := range m.reg {
+		ws = append(ws, fmt.Sprintf("R%d=%04x", i, v))
+	}
+	ws = append(ws, "; ")
+	if len(words) > 0 {
+		ws = append(ws, FormatInstruction(words))
+	}
+	return strings.Join(ws, " ")
+}
+
+func FormatWords(values []uint16, nword int) string {
+	fields := make([]string, nword)
+	for idx, value := range values {
+		fields[idx] = fmt.Sprintf("0x%04x", value)
+	}
+	return strings.Join(fields, "  ")
+}
+
 func FormatVal(value uint16) string {
 	regnum, err := RegisterNumber(value)
 	if err == nil {
@@ -275,15 +327,6 @@ func FormatVal(value uint16) string {
 	} else {
 		return fmt.Sprintf("%d", value)
 	}
-}
-
-func FormatWords(values []uint16, nword int) string {
-	fields := make([]string, nword)
-	for idx, value := range(values) {
-		fields[idx] = fmt.Sprintf("0x%04x", value)
-	}
-	return strings.Join(fields, "  ")
-
 }
 
 // FormatInstruction returns a string representing the instruction in
@@ -305,19 +348,19 @@ func FormatInstruction(words []uint16) string {
 		return fmt.Sprintf("%s @%s", name, FormatVal(words[1]))
 	case RV, VV:
 		return fmt.Sprintf("%s %s, %s", name, FormatVal(words[1]),
-		FormatVal(words[2]))
+			FormatVal(words[2]))
 	case RA:
 		return fmt.Sprintf("%s %s, @%s", name, FormatVal(words[1]),
-		FormatVal(words[2]))
+			FormatVal(words[2]))
 	case RVV:
 		return fmt.Sprintf("%s %s, %s, %s", name, FormatVal(words[1]),
-		FormatVal(words[2]), FormatVal(words[3]))
+			FormatVal(words[2]), FormatVal(words[3]))
 	case AV:
 		return fmt.Sprintf("%s @%s, %s", name, FormatVal(words[1]),
-		FormatVal(words[2]))
+			FormatVal(words[2]))
 	case VA:
 		return fmt.Sprintf("%s %s, @%s", name, FormatVal(words[1]),
-		FormatVal(words[2]))
+			FormatVal(words[2]))
 	default:
 		return name
 	}
@@ -326,14 +369,23 @@ func FormatInstruction(words []uint16) string {
 // Execute the program starting at the current program counter.
 // An error is returned if execution doesn't terminate on a HALT
 // instruction.
-func (m *Machine) Execute(addresses chan uint16) (err error) {
+func (m *Machine) Execute(addresses chan uint16, fp io.Writer) (err error) {
 	var val uint16
 	var ch byte
 	for err == nil {
+		// Hacks to bypass the confirmation algorithm
+		if m.pc == 0x1545 {
+			_ = m.SetRegister(7, 25734)
+		} else if m.pc == 0x178b {
+			_ = m.SetRegister(0, 0)
+			_ = m.SetRegister(1, 5)
+		}
+
 		op, a, b, c, next_pc, err := m.GetInstruction(m.pc)
 		if err != nil {
 			break
 		}
+		m.PrintState(fp, []uint16{uint16(op), a, b, c})
 
 		switch op {
 		case HALT:
@@ -419,7 +471,7 @@ func (m *Machine) Disassemble(wtr io.Writer, addresses chan uint16) error {
 	addr_queue := []uint16{}
 	for {
 		addr := <-addresses
-		if ! visited[addr] {
+		if !visited[addr] {
 			fmt.Fprintf(wtr, "%04x:\n", addr)
 			addr_queue = append(addr_queue, addr)
 		}
@@ -439,8 +491,8 @@ func (m *Machine) Disassemble(wtr io.Writer, addresses chan uint16) error {
 				words := FormatWords(values, 4)
 				code := FormatInstruction(values)
 				fmt.Fprintf(wtr, "%04x: %-30s : %s\n", addr, words, code)
-				for _, value := range(values[1:]) {
-					if value < MAXVALUE && value > 0xff && ! visited[value] {
+				for _, value := range values[1:] {
+					if value < MAXVALUE && value > 0xff && !visited[value] {
 						addr_queue = append(addr_queue, value)
 					}
 				}

@@ -1,15 +1,16 @@
 package main
 
 import (
-	"io"
 	"fmt"
 	"github.com/tomp/synacor-challenge/machine"
+	"io"
 	"os"
 )
 
 const (
-	INPUTFILE string = "challenge.bin"
+	INPUTFILE  string = "challenge.bin"
 	SOURCEFILE string = "challenge.asm"
+	TRACEFILE  string = "trace.txt"
 )
 
 func main() {
@@ -46,7 +47,12 @@ func main() {
 
 	addrChan <- uint16(0)
 
-	err = m.Execute(addrChan)
+	fp2, err := os.Create(TRACEFILE)
+	if err == nil {
+		fmt.Printf("Writing trace to %s\n", TRACEFILE)
+	}
+
+	err = m.Execute(addrChan, fp2)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err)
 	}
